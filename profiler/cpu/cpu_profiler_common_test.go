@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// tolerance is the allowed error margin for timing intervals in tests.
+const tolerance = 0.2 / 100.0
+
 // TestCPUProfilerIntegration performs comprehensive integration testing of the CPU profiler.
 // It validates the complete lifecycle: initialization, profiling start/stop, metrics collection,
 // and data structure integrity.
@@ -47,10 +50,25 @@ func TestCPUProfilerIntegration(t *testing.T) {
 	t.Run("ValidateCollectedMetrics", func(t *testing.T) {
 		metricsStream.mutex.RLock()
 		defer metricsStream.mutex.RUnlock()
-
+		isInitialized := false
+		var previous_timestamp time.Time
 		for i, metrics := range metricsStream.CPUDynamicMetrics {
 			if metrics.Timestamp.IsZero() {
 				t.Errorf("Metric %d has zero timestamp", i)
+			}
+			if !isInitialized {
+				isInitialized = true
+				previous_timestamp = metrics.Timestamp
+			} else {
+				// Validate the interval between metrics
+
+				diff := metrics.Timestamp.Sub(previous_timestamp).Abs()
+				allowedError := time.Duration(float64(interval) * tolerance)
+
+				if diff > interval+allowedError || diff < interval-allowedError {
+					t.Errorf("Expected interval ~%v (+/-%v), got: %v", interval, allowedError, diff)
+				}
+				previous_timestamp = metrics.Timestamp
 			}
 			if metrics.CPUUtilization == nil {
 				t.Errorf("Metric %d missing CPU utilization", i)
