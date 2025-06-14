@@ -8,7 +8,6 @@ import (
 	"github.com/shirou/gopsutil/v4/net"
 )
 
-
 // NetworkInterfaceStat represents statistics for a network interface,
 // including bytes sent/received, packets sent/received, errors, drops,
 // and derived metrics such as bits per second and packets per second.
@@ -33,14 +32,13 @@ type NetworkInterfaceStat struct {
 }
 
 // SocketStat represents aggregated statistics for socket connections
-// for a specific protocol (e.g., TCP or UDP). It includes a map of 
+// for a specific protocol (e.g., TCP or UDP). It includes a map of
 // connection states and their counts, as well as the total number of sockets.
 type SocketStat struct {
 	Protocol     string         // TCP/UDP
 	StateCounts  map[string]int // ESTABLISHED, TIME_WAIT, etc.
 	TotalSockets int
 }
-
 
 // NetProfile holds a snapshot of network profiling data, including a
 // timestamp, network interface statistics, and socket connection statistics.
@@ -49,7 +47,6 @@ type NetProfile struct {
 	NetworkInterface []NetworkInterfaceStat
 	Sockets          []SocketStat
 }
-
 
 // SocketStats populates the NetProfile's Sockets field by retrieving
 // all current network connections on the system and aggregating them
@@ -102,30 +99,106 @@ func (Netprof *NetProfile) SocketStats() {
 	}
 
 }
-// TODO need to impelemt NetworkInterfaceStat method to get the Network Interface data
 
+// NetworkStats collects and updates network interface statistics.
+//
+// It retrieves I/O counters for all available network interfaces and populates
+// the NetProfile's NetworkInterface slice with the current stats.
+//
+// If previous statistics are provided in `prev`, it calculates the per-second
+// rates for bytes sent/received, packets sent/received, and error rates
+// based on the given `deltaTime` (time elapsed in seconds).
 
+func (Netprof *NetProfile) NetworkStats(prev map[string]NetworkInterfaceStat, deltaTime float64) {
+	// Get IO counters for all interfaces
+	IOstats, err := net.IOCounters(true)
+	if err != nil {
+		panic(err)
+	}
 
+	// Reset current list
+	Netprof.NetworkInterface = []NetworkInterfaceStat{}
 
+	for _, io := range IOstats {
+		name := io.Name
 
+		stat := NetworkInterfaceStat{
+			Name:        name,
+			BytesSent:   io.BytesSent,
+			BytesRecv:   io.BytesRecv,
+			PacketsSent: io.PacketsSent,
+			PacketsRecv: io.PacketsRecv,
+			ErrIn:       io.Errin,
+			ErrOut:      io.Errout,
+			DropIn:      io.Dropin,
+			DropOut:     io.Dropout,
+		}
 
+		// If previous data exists, compute per-second rates
+		if p, ok := prev[name]; ok {
+			stat.BpsSent = float64(io.BytesSent-p.BytesSent) / deltaTime
+			stat.BpsRecv = float64(io.BytesRecv-p.BytesRecv) / deltaTime
+			stat.PpsSent = float64(io.PacketsSent-p.PacketsSent) / deltaTime
+			stat.PpsRecv = float64(io.PacketsRecv-p.PacketsRecv) / deltaTime
+			stat.ErrorRateIn = float64(io.Errin-p.ErrIn) / deltaTime
+			stat.ErrorRateOut = float64(io.Errout-p.ErrOut) / deltaTime
+		}
 
+		Netprof.NetworkInterface = append(Netprof.NetworkInterface, stat)
+	}
+}
 
 // wrote the main function with GPT for testing because I was lazy
 func main() {
 	var netprof NetProfile
 
-	// Call your method
-	netprof.SocketStats()
+	// Previous snapshot for interface stats
+	prev := make(map[string]NetworkInterfaceStat)
+	interval := 1 * time.Second
 
-	// Check if any stats were found
-	if len(netprof.Sockets) == 0 {
-		log.Println("No socket stats found.")
-		return
+	// Limit to 5 iterations
+	const maxIterations = 5
+	for i := 1; i <= maxIterations; i++ {
+		start := time.Now()
+
+		fmt.Printf("\n--- Iteration #%d ---\n", i)
+
+		// 1️⃣ Update sockets
+		netprof.SocketStats()
+
+		// 2️⃣ Update network stats with deltas
+		netprof.NetworkStats(prev, interval.Seconds())
+
+		// 3️⃣ Print SocketStats
+		if len(netprof.Sockets) == 0 {
+			log.Println("No socket stats found.")
+		} else {
+			fmt.Println("------ SOCKET STATS ------")
+			for i, socket := range netprof.Sockets {
+				fmt.Printf("SocketStat #%d: %+v\n", i+1, socket)
+			}
+		}
+
+		// 4️⃣ Print NetworkInterface stats
+		if len(netprof.NetworkInterface) == 0 {
+			log.Println("No network interface stats found.")
+		} else {
+			fmt.Println("------ NETWORK INTERFACE STATS ------")
+			for i, iface := range netprof.NetworkInterface {
+				fmt.Printf("Interface #%d: %+v\n", i+1, iface)
+			}
+		}
+
+		// 5️⃣ Update previous snapshot
+		newPrev := make(map[string]NetworkInterfaceStat)
+		for _, stat := range netprof.NetworkInterface {
+			newPrev[stat.Name] = stat
+		}
+		prev = newPrev
+
+		// Sleep until next interval, accounting for elapsed time
+		time.Sleep(interval - time.Since(start))
 	}
 
-	// Print ALL socket stats
-	for i, socket := range netprof.Sockets {
-		fmt.Printf("SocketStat #%d: %+v\n", i+1, socket)
-	}
+	fmt.Println("\n✅ Finished profiling after 5 iterations.")
 }
