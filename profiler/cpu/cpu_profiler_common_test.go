@@ -17,14 +17,21 @@ const tolerance = 0.2 / 100.0
 // and data structure integrity.
 func TestCPUProfilerIntegration(t *testing.T) {
 	interval := 100 * time.Millisecond // Shorter interval for faster tests
-	metricsStream := NewCPUMetricStream()
+	metricsStream, err := NewCPUMetricStream()
+	if err != nil {
+		t.Fatalf("Failed to create CPU metrics stream: %v", err)
+	}
 
 	// Test starting profiling
 	t.Run("StartProfiling", func(t *testing.T) {
 		var wg sync.WaitGroup
 		wg.Add(1)
 
-		go metricsStream.StartProfiling(interval, &wg)
+		go func() {
+			if err := metricsStream.StartProfiling(interval, &wg); err != nil {
+				t.Errorf("StartProfiling failed: %v", err)
+			}
+		}()
 		time.Sleep(500 * time.Millisecond) // Let it collect some metrics
 
 		// Stop profiling with proper error handling
@@ -104,13 +111,20 @@ func TestCPUProfilerIntegration(t *testing.T) {
 // goroutine lifecycle management.
 func TestCPUProfilerWithWaitGroup(t *testing.T) {
 	interval := 100 * time.Millisecond
-	metricsStream := NewCPUMetricStream()
+	metricsStream, err := NewCPUMetricStream()
+	if err != nil {
+		t.Fatalf("Failed to create CPU metrics stream: %v", err)
+	}
 
 	t.Run("ProfilingWithWaitGroup", func(t *testing.T) {
 		var wg sync.WaitGroup
 		wg.Add(1)
 
-		go metricsStream.StartProfiling(interval, &wg)
+		go func() {
+			if err := metricsStream.StartProfiling(interval, &wg); err != nil {
+				t.Errorf("StartProfiling failed: %v", err)
+			}
+		}()
 
 		time.Sleep(300 * time.Millisecond)
 		if err := metricsStream.StopProfiling(nil); err != nil {
@@ -138,6 +152,9 @@ func TestCPUProfilerWithWaitGroup(t *testing.T) {
 		if metricsCount == 0 {
 			t.Error("Expected to collect dynamic metrics")
 		}
+		if metricsCount != 3 {
+			t.Errorf("Expected 3 metrics, got %d", metricsCount)
+		}
 		t.Logf("Collected %d metrics with WaitGroup", metricsCount)
 	})
 }
@@ -147,9 +164,17 @@ func TestCPUProfilerWithWaitGroup(t *testing.T) {
 // are collected during construction.
 func TestCPUMetricStreamCreation(t *testing.T) {
 	t.Run("NewCPUMetricStream", func(t *testing.T) {
-		stream := NewCPUMetricStream()
+		stream, err := NewCPUMetricStream()
+		if err != nil {
+			t.Fatalf("Failed to create CPU metrics stream: %v", err)
+		}
 		if stream == nil {
 			t.Error("Expected non-nil CPU metric stream")
+		}
+
+		// Verify logger is initialized
+		if stream.logger == nil {
+			t.Error("Expected logger to be initialized")
 		}
 
 		// Verify static metrics are populated
@@ -175,19 +200,26 @@ func TestCPUMetricStreamCreation(t *testing.T) {
 func TestConcurrentAccess(t *testing.T) {
 	t.Run("ConcurrentMetricsAccess", func(t *testing.T) {
 		interval := 50 * time.Millisecond
-		metricsStream := NewCPUMetricStream()
+		metricsStream, err := NewCPUMetricStream()
+		if err != nil {
+			t.Fatalf("Failed to create CPU metrics stream: %v", err)
+		}
 
 		var wg sync.WaitGroup
 		wg.Add(1)
 
 		// Start profiling
-		go metricsStream.StartProfiling(interval, &wg)
+		go func() {
+			if err := metricsStream.StartProfiling(interval, &wg); err != nil {
+				t.Errorf("StartProfiling failed: %v", err)
+			}
+		}()
 
 		// Concurrently read metrics while profiling
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			for i := 0; i < 10; i++ {
+			for range 10 {
 				metricsStream.mutex.RLock()
 				_ = len(metricsStream.CPUDynamicMetrics)
 				metricsStream.mutex.RUnlock()
@@ -219,7 +251,10 @@ func TestConcurrentAccess(t *testing.T) {
 // and other boundary conditions that should be handled gracefully.
 func TestCPUProfilerEdgeCases(t *testing.T) {
 	t.Run("StopWithoutStart", func(t *testing.T) {
-		metricsStream := NewCPUMetricStream()
+		metricsStream, err := NewCPUMetricStream()
+		if err != nil {
+			t.Fatalf("Failed to create CPU metrics stream: %v", err)
+		}
 		// This should not panic
 		if err := metricsStream.StopProfiling(nil); err != nil {
 			t.Logf("Expected error when stopping without starting: %v", err)
@@ -227,11 +262,18 @@ func TestCPUProfilerEdgeCases(t *testing.T) {
 	})
 
 	t.Run("MultipleStops", func(t *testing.T) {
-		metricsStream := NewCPUMetricStream()
+		metricsStream, err := NewCPUMetricStream()
+		if err != nil {
+			t.Fatalf("Failed to create CPU metrics stream: %v", err)
+		}
 		var wg sync.WaitGroup
 		wg.Add(1)
 
-		go metricsStream.StartProfiling(100*time.Millisecond, &wg)
+		go func() {
+			if err := metricsStream.StartProfiling(100*time.Millisecond, &wg); err != nil {
+				t.Errorf("StartProfiling failed: %v", err)
+			}
+		}()
 		time.Sleep(200 * time.Millisecond)
 
 		// First stop
@@ -244,6 +286,55 @@ func TestCPUProfilerEdgeCases(t *testing.T) {
 			t.Logf("Expected error on second stop: %v", err)
 		}
 
+		wg.Wait()
+	})
+
+	t.Run("InvalidInterval", func(t *testing.T) {
+		metricsStream, err := NewCPUMetricStream()
+		if err != nil {
+			t.Fatalf("Failed to create CPU metrics stream: %v", err)
+		}
+
+		// Test zero interval
+		err = metricsStream.StartProfiling(0, nil)
+		if err == nil {
+			t.Error("Expected error for zero interval")
+		}
+
+		// Test negative interval
+		err = metricsStream.StartProfiling(-time.Second, nil)
+		if err == nil {
+			t.Error("Expected error for negative interval")
+		}
+	})
+
+	t.Run("DoubleStart", func(t *testing.T) {
+		metricsStream, err := NewCPUMetricStream()
+		if err != nil {
+			t.Fatalf("Failed to create CPU metrics stream: %v", err)
+		}
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+
+		go func() {
+			if err := metricsStream.StartProfiling(100*time.Millisecond, &wg); err != nil {
+				t.Errorf("First StartProfiling failed: %v", err)
+			}
+		}()
+
+		time.Sleep(50 * time.Millisecond)
+
+		// Try to start again while running
+		err = metricsStream.StartProfiling(100*time.Millisecond, nil)
+		if err == nil {
+			t.Error("Expected error when starting profiling twice")
+		}
+
+		// Clean up
+		if err := metricsStream.StopProfiling(nil); err != nil {
+			t.Errorf("StopProfiling failed: %v", err)
+		}
 		wg.Wait()
 	})
 }
