@@ -10,6 +10,7 @@
 package cpu
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -42,6 +43,11 @@ func NewCPUStaticMetrics() (*CPUStaticMetrics, error) {
 		cpu:      *cpu,
 		topology: *topology,
 	}, nil
+}
+
+// String provides a human-readable representation of the CPUStaticMetrics.
+func (c *CPUStaticMetrics) String() string {
+	return c.cpu.String() + "\n" + c.topology.String()
 }
 
 // CPUDynamicsMetrics represents a snapshot of CPU performance metrics at a specific point in time.
@@ -79,6 +85,18 @@ func NewCPUMetricsAtInstant(staticmetrics CPUStaticMetrics) *CPUDynamicsMetrics 
 	}
 }
 
+func (cpumetrics *CPUDynamicsMetrics) String() string {
+	return "CPU Utilization: " + fmt.Sprintf("%v", cpumetrics.CPUUtilization) +
+		"\nCPU Frequency: " + fmt.Sprintf("%v", cpumetrics.CPUFrequency) +
+		"\nCPU Temperature: " + fmt.Sprintf("%v", cpumetrics.CPUTemperature) +
+		"\nCPU Power: " + fmt.Sprintf("%v", cpumetrics.CPUPower) +
+		"\nCache Usage: L1: " + fmt.Sprintf("%.2f", cpumetrics.CacheUsage[0]) +
+		", L2: " + fmt.Sprintf("%.2f", cpumetrics.CacheUsage[1]) +
+		", L3: " + fmt.Sprintf("%.2f", cpumetrics.CacheUsage[2]) +
+		"\nTotal CPU Power: " + fmt.Sprintf("%d", cpumetrics.TotalCPUPower) +
+		"\nTimestamp: " + cpumetrics.Timestamp.String()
+}
+
 // CPUMetricsStream manages the lifecycle and data collection of CPU profiling.
 // It maintains both static CPU information and a time-series of dynamic metrics.
 //
@@ -97,6 +115,12 @@ type CPUMetricsStream struct {
 	stopChan          chan struct{}        // Signal channel for stopping profiling
 	mutex             sync.RWMutex         // Protects CPUDynamicMetrics access
 	stopOnce          sync.Once            // Ensures stopChan is closed only once
+}
+
+func (metricsStream *CPUMetricsStream) String() string {
+	return "CPU Metrics Stream:\n" +
+		"Static Metrics: " + metricsStream.CPUStaticMetrics.String() +
+		"\nDynamic Metrics Count: " + fmt.Sprintf("%d", len(metricsStream.CPUDynamicMetrics))
 }
 
 // StartProfiling begins continuous CPU metrics collection at the specified interval.
