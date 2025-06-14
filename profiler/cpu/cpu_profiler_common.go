@@ -11,6 +11,7 @@ package cpu
 
 import (
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -31,14 +32,32 @@ type CPUStaticMetrics struct {
 //   - *CPUStaticMetrics: Populated static metrics structure
 //   - error: Any error encountered during hardware information gathering
 func NewCPUStaticMetrics() (*CPUStaticMetrics, error) {
+
 	cpu, err := ghw.CPU()
 	if err != nil {
-		return nil, err
+		log.Printf("ERROR: Failed to collect CPU information: %v", err)
+		return nil, fmt.Errorf("failed to collect CPU information: %w", err)
 	}
+
+	if cpu == nil {
+		log.Println("ERROR: CPU information is nil")
+		return nil, fmt.Errorf("CPU information is nil")
+	}
+
 	topology, err := ghw.Topology()
 	if err != nil {
-		return nil, err
+		log.Printf("ERROR: Failed to collect topology information: %v", err)
+		return nil, fmt.Errorf("failed to collect topology information: %w", err)
 	}
+
+	if topology == nil {
+		log.Println("ERROR: Topology information is nil")
+		return nil, fmt.Errorf("topology information is nil")
+	}
+
+	log.Printf("INFO: Topology detected - Nodes: %d", len(topology.Nodes))
+	log.Println("INFO: Static CPU metrics collection completed successfully")
+
 	return &CPUStaticMetrics{
 		cpu:      *cpu,
 		topology: *topology,
@@ -70,11 +89,10 @@ type CPUDynamicsMetrics struct {
 //
 // Returns:
 //   - *CPUDynamicsMetrics: Initialized metrics structure with timestamp
-//
-// TODO: Implement actual metric collection from system interfaces
-func NewCPUMetricsAtInstant(staticmetrics CPUStaticMetrics) *CPUDynamicsMetrics {
+func NewCPUMetricsAtInstant(staticmetrics CPUStaticMetrics) (*CPUDynamicsMetrics, error) {
 	timestamp := time.Now()
-	return &CPUDynamicsMetrics{
+	// TODO: Implement actual metric collection from system interfaces
+	metrics := &CPUDynamicsMetrics{
 		CPUUtilization: make([]float64, staticmetrics.cpu.TotalHardwareThreads),
 		CPUFrequency:   make([]float64, staticmetrics.cpu.TotalCores),
 		CPUTemperature: make([]float64, staticmetrics.cpu.TotalCores),
@@ -83,6 +101,7 @@ func NewCPUMetricsAtInstant(staticmetrics CPUStaticMetrics) *CPUDynamicsMetrics 
 		TotalCPUPower:  int32(0),                  // TODO: Implement total power measurement
 		Timestamp:      timestamp,
 	}
+	return metrics, nil
 }
 
 func (cpumetrics *CPUDynamicsMetrics) String() string {
@@ -115,6 +134,8 @@ type CPUMetricsStream struct {
 	stopChan          chan struct{}        // Signal channel for stopping profiling
 	mutex             sync.RWMutex         // Protects CPUDynamicMetrics access
 	stopOnce          sync.Once            // Ensures stopChan is closed only once
+	logger            *log.Logger          // Logger for debugging and error reporting
+	isRunning         bool                 // Tracks profiling state
 }
 
 func (metricsStream *CPUMetricsStream) String() string {
@@ -136,26 +157,60 @@ func (metricsStream *CPUMetricsStream) String() string {
 // TODO: Add temperature collection via thermal zones
 // TODO: Add power consumption monitoring
 // TODO: Add cache usage statistics collection
-func (metricsStream *CPUMetricsStream) StartProfiling(interval time.Duration, wg *sync.WaitGroup) {
+func (metricsStream *CPUMetricsStream) StartProfiling(interval time.Duration, wg *sync.WaitGroup) error {
 	if wg != nil {
 		defer wg.Done()
 	}
 
+	// Validate interval
+	if interval <= 0 {
+		err := fmt.Errorf("invalid profiling interval: %v", interval)
+		metricsStream.logger.Printf("ERROR: %v", err)
+		return err
+	}
+
+	if interval < 10*time.Millisecond {
+		metricsStream.logger.Printf("WARNING: Very short profiling interval (%v) may cause high CPU usage", interval)
+	}
+
+	metricsStream.mutex.Lock()
+	if metricsStream.isRunning {
+		metricsStream.mutex.Unlock()
+		err := fmt.Errorf("profiling is already running")
+		metricsStream.logger.Printf("ERROR: %v", err)
+		return err
+	}
+	metricsStream.isRunning = true
+	metricsStream.mutex.Unlock()
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+
+	metricsCollected := 0
 
 	for {
 		select {
 		case <-ticker.C:
+
 			// TODO: Replace with actual metric collection implementation
-			cpumetricsatinstant := NewCPUMetricsAtInstant(metricsStream.CPUStaticMetrics)
+			cpumetricsatinstant, err := NewCPUMetricsAtInstant(metricsStream.CPUStaticMetrics)
+			if err != nil {
+				metricsStream.logger.Printf("ERROR: Failed to collect CPU metrics: %v", err)
+				continue // Skip this collection cycle but continue profiling
+			}
 
 			metricsStream.mutex.Lock()
 			metricsStream.CPUDynamicMetrics = append(metricsStream.CPUDynamicMetrics, *cpumetricsatinstant)
+			metricsCollected++
 			metricsStream.mutex.Unlock()
 
 		case <-metricsStream.stopChan:
-			return
+			metricsStream.mutex.Lock()
+			metricsStream.isRunning = false
+			metricsStream.mutex.Unlock()
+
+			metricsStream.logger.Printf("INFO: CPU profiling stopped. Total metrics collected: %d", metricsCollected)
+			return nil
 		}
 	}
 }
@@ -167,16 +222,31 @@ func (metricsStream *CPUMetricsStream) StartProfiling(interval time.Duration, wg
 //   - wg: Optional WaitGroup to signal completion (typically nil, as StartProfiling handles this)
 //
 // Returns:
-//   - error: Always nil in current implementation, reserved for future error handling
+//   - error: Any error encountered during profiling stop
 func (s *CPUMetricsStream) StopProfiling(wg *sync.WaitGroup) error {
+	s.logger.Println("INFO: Stopping CPU profiling")
+
+	var stopErr error
 	s.stopOnce.Do(func() {
 		if s.stopChan != nil {
+			s.logger.Println("DEBUG: Sending stop signal")
 			close(s.stopChan)
+		} else {
+			stopErr = fmt.Errorf("stop channel is nil")
+			s.logger.Printf("ERROR: %v", stopErr)
 		}
 	})
+
 	if wg != nil {
 		wg.Done()
+		s.logger.Println("DEBUG: WaitGroup signaled")
 	}
+
+	if stopErr != nil {
+		return stopErr
+	}
+
+	s.logger.Println("INFO: CPU profiling stop completed")
 	return nil
 }
 
@@ -190,17 +260,33 @@ func (s *CPUMetricsStream) StopProfiling(wg *sync.WaitGroup) error {
 //   - If static CPU metrics collection fails (indicates system compatibility issues)
 //
 // TODO: Replace panic with proper error handling and return (stream, error)
-func NewCPUMetricStream() *CPUMetricsStream {
+func NewCPUMetricStream() (*CPUMetricsStream, error) {
 	cpuStaticMetrics, err := NewCPUStaticMetrics()
 	if err != nil {
-		// TODO: Return error instead of panicking
-		panic(err)
+		log.Printf("ERROR: Failed to initialize static CPU metrics: %v", err)
+		return nil, fmt.Errorf("failed to initialize static CPU metrics: %w", err)
 	}
 
-	return &CPUMetricsStream{
+	if cpuStaticMetrics == nil {
+		err := fmt.Errorf("static CPU metrics is nil")
+		log.Printf("ERROR: %v", err)
+		return nil, err
+	}
+
+	// Use the standard logger for this example; you can customize as needed
+	stdLogger := log.Default()
+
+	stream := &CPUMetricsStream{
 		CPUStaticMetrics:  *cpuStaticMetrics,
 		CPUDynamicMetrics: make([]CPUDynamicsMetrics, 0),
 		stopChan:          make(chan struct{}),
 		stopOnce:          sync.Once{},
+		logger:            stdLogger,
+		isRunning:         false,
 	}
+
+	stdLogger.Printf("INFO: CPU metrics stream initialized successfully - Cores: %d, Threads: %d",
+		cpuStaticMetrics.cpu.TotalCores, cpuStaticMetrics.cpu.TotalHardwareThreads)
+
+	return stream, nil
 }
