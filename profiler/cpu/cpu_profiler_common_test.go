@@ -1,3 +1,6 @@
+// Package cpu provides comprehensive testing for the CPU profiler functionality.
+// This test suite covers integration testing, concurrent access patterns,
+// edge cases, and validation of both static and dynamic CPU metrics collection.
 package cpu
 
 import (
@@ -6,6 +9,9 @@ import (
 	"time"
 )
 
+// TestCPUProfilerIntegration performs comprehensive integration testing of the CPU profiler.
+// It validates the complete lifecycle: initialization, profiling start/stop, metrics collection,
+// and data structure integrity.
 func TestCPUProfilerIntegration(t *testing.T) {
 	interval := 100 * time.Millisecond // Shorter interval for faster tests
 	metricsStream := NewCPUMetricStream()
@@ -75,6 +81,9 @@ func TestCPUProfilerIntegration(t *testing.T) {
 	})
 }
 
+// TestCPUProfilerWithWaitGroup verifies proper synchronization using sync.WaitGroup.
+// This test ensures that the profiler correctly signals completion and handles
+// goroutine lifecycle management.
 func TestCPUProfilerWithWaitGroup(t *testing.T) {
 	interval := 100 * time.Millisecond
 	metricsStream := NewCPUMetricStream()
@@ -115,6 +124,9 @@ func TestCPUProfilerWithWaitGroup(t *testing.T) {
 	})
 }
 
+// TestCPUMetricStreamCreation validates the proper initialization of CPUMetricStream.
+// It verifies that all required fields are properly initialized and static metrics
+// are collected during construction.
 func TestCPUMetricStreamCreation(t *testing.T) {
 	t.Run("NewCPUMetricStream", func(t *testing.T) {
 		stream := NewCPUMetricStream()
@@ -139,6 +151,9 @@ func TestCPUMetricStreamCreation(t *testing.T) {
 	})
 }
 
+// TestConcurrentAccess validates thread-safety of the CPU profiler.
+// This test ensures that concurrent reads of metrics while profiling is active
+// do not cause race conditions or data corruption.
 func TestConcurrentAccess(t *testing.T) {
 	t.Run("ConcurrentMetricsAccess", func(t *testing.T) {
 		interval := 50 * time.Millisecond
@@ -181,7 +196,9 @@ func TestConcurrentAccess(t *testing.T) {
 	})
 }
 
-// Add a test for edge cases
+// TestCPUProfilerEdgeCases tests edge cases and error conditions.
+// This includes scenarios like stopping without starting, multiple stops,
+// and other boundary conditions that should be handled gracefully.
 func TestCPUProfilerEdgeCases(t *testing.T) {
 	t.Run("StopWithoutStart", func(t *testing.T) {
 		metricsStream := NewCPUMetricStream()
