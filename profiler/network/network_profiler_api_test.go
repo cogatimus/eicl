@@ -1,63 +1,51 @@
-package main
+package network
 
 import (
+	"log"
 	"testing"
 	"time"
-	"github.com/shirou/gopsutil/v4/net"
 )
 
-// Mock function for net.Connections
-func mockConnections(t*testing.T,protocols []string, statuses []string) []net.ConnectionStat {
-	var connections []net.ConnectionStat
-	for _, proto := range protocols {
-		for _, status := range statuses {
-			connections = append(connections, net.ConnectionStat{
-				Type:   protoToType(t,proto),
-				Status: status,
-			})
-		}
-	}
-	return connections
-}
-
-// Helper function to convert protocol string to type
-func protoToType(t *testing.T,proto string) uint32 {
-	t.Helper()
-	switch proto {
-	case "tcp":
-		return 1
-	case "udp":
-		return 2
-	default:
-		return 0
-	}
-}
-
 func TestSocketStats(t *testing.T) {
-	// Mock data
-	protocols := []string{"tcp", "udp"}
-	// statuses := []string{"ESTABLISHED", "TIME_WAIT", "CLOSE_WAIT"}
+	var prof NetProfile
+	prof.SocketStats()
 
-	// Replace net.Connections with mock function
-	// netConnections := mockConnections(t,protocols, statuses)
-
-	// Create NetProfile instance
-	netprof := NetProfile{
-		Timestamp: time.Now(),
-
+	if len(prof.Sockets) == 0 {
+		t.Error("Expected at least one socket stat, got none")
 	}
 
-	// Call SocketStats method
-	netprof.SocketStats()
+	for _, s := range prof.Sockets {
+		log.Printf("SocketStat: Protocol=%s, TotalSockets=%d, States=%v",
+			s.Protocol, s.TotalSockets, s.StateCounts)
+	}
+}
 
-	// Validate results
-	if len(netprof.Sockets) != len(protocols) {
-		t.Errorf("Expected %d protocols, got %d", len(protocols), len(netprof.Sockets))
+func TestNetworkStats(t *testing.T) {
+	var prof NetProfile
+
+	// Create a dummy previous stat
+	prev := make(map[string]NetworkInterfaceStat)
+	// Call once to get current stats
+	prof.NetworkStats(prev, 1.0)
+	if len(prof.NetworkInterface) == 0 {
+		t.Error("Expected at least one network interface stat, got none")
 	}
 
-	for _, socket := range netprof.Sockets {
-		if socket.TotalSockets == 0 {
-			t.Errorf("Expected non-zero TotalSockets for protocol %s", socket.Protocol)
+	// Save current as previous
+	for _, stat := range prof.NetworkInterface {
+		prev[stat.Name] = stat
+	}
+
+	// Wait a second to create measurable difference
+	time.Sleep(1 * time.Second)
+
+	// Call again with previous data and deltaTime = 1 second
+	prof.NetworkStats(prev, 1.0)
+
+	for _, stat := range prof.NetworkInterface {
+		log.Printf("NetworkInterfaceStat: %+v", stat)
+		if stat.BpsSent < 0 || stat.BpsRecv < 0 {
+			t.Errorf("Negative Bps detected for %s", stat.Name)
 		}
 	}
 }

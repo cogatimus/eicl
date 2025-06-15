@@ -1,10 +1,8 @@
-package main
+package network
 
 import (
-	"fmt"
-	"log"
 	"time"
-
+	"log"
 	"github.com/shirou/gopsutil/v4/net"
 )
 
@@ -44,8 +42,9 @@ type SocketStat struct {
 // timestamp, network interface statistics, and socket connection statistics.
 type NetProfile struct {
 	Timestamp        time.Time
-	NetworkInterface []NetworkInterfaceStat
 	Sockets          []SocketStat
+	NetworkInterface []NetworkInterfaceStat
+	
 }
 
 // SocketStats populates the NetProfile's Sockets field by retrieving
@@ -55,10 +54,11 @@ type NetProfile struct {
 // It uses the gopsutil library to gather low-level socket data.
 // If an error occurs while retrieving connections, it panics.
 func (Netprof *NetProfile) SocketStats() {
-
+	log.Println("Starting SocketStats collection")
 	connections, err := net.Connections("all")
+
 	if err != nil {
-		panic(err)
+		log.Fatalf("Failed to get network connections: %v", err)
 	}
 
 	protoMap := make(map[string]map[string]int)
@@ -96,8 +96,9 @@ func (Netprof *NetProfile) SocketStats() {
 			StateCounts:  stateCounts,
 			TotalSockets: total,
 		})
+		log.Printf("Collected SocketStat for protocol %s: %+v\n", proto, stateCounts)
 	}
-
+	log.Println("Completed SocketStats collection")
 }
 
 // NetworkStats collects and updates network interface statistics.
@@ -110,10 +111,11 @@ func (Netprof *NetProfile) SocketStats() {
 // based on the given `deltaTime` (time elapsed in seconds).
 
 func (Netprof *NetProfile) NetworkStats(prev map[string]NetworkInterfaceStat, deltaTime float64) {
+	log.Println("Starting NetworkStats collection")
 	// Get IO counters for all interfaces
 	IOstats, err := net.IOCounters(true)
 	if err != nil {
-		panic(err)
+		log.Fatalf("Failed to get IO counters: %v", err)
 	}
 
 	// Reset current list
@@ -145,60 +147,8 @@ func (Netprof *NetProfile) NetworkStats(prev map[string]NetworkInterfaceStat, de
 		}
 
 		Netprof.NetworkInterface = append(Netprof.NetworkInterface, stat)
+		log.Printf("Collected NetworkInterfaceStat for %s: %+v\n", name, stat)
 	}
+	log.Println("Completed NetworkStats collection")
 }
 
-// wrote the main function with GPT for testing because I was lazy
-func main() {
-	var netprof NetProfile
-
-	// Previous snapshot for interface stats
-	prev := make(map[string]NetworkInterfaceStat)
-	interval := 1 * time.Second
-
-	// Limit to 5 iterations
-	const maxIterations = 5
-	for i := 1; i <= maxIterations; i++ {
-		start := time.Now()
-
-		fmt.Printf("\n--- Iteration #%d ---\n", i)
-
-		// 1️⃣ Update sockets
-		netprof.SocketStats()
-
-		// 2️⃣ Update network stats with deltas
-		netprof.NetworkStats(prev, interval.Seconds())
-
-		// 3️⃣ Print SocketStats
-		if len(netprof.Sockets) == 0 {
-			log.Println("No socket stats found.")
-		} else {
-			fmt.Println("------ SOCKET STATS ------")
-			for i, socket := range netprof.Sockets {
-				fmt.Printf("SocketStat #%d: %+v\n", i+1, socket)
-			}
-		}
-
-		// 4️⃣ Print NetworkInterface stats
-		if len(netprof.NetworkInterface) == 0 {
-			log.Println("No network interface stats found.")
-		} else {
-			fmt.Println("------ NETWORK INTERFACE STATS ------")
-			for i, iface := range netprof.NetworkInterface {
-				fmt.Printf("Interface #%d: %+v\n", i+1, iface)
-			}
-		}
-
-		// 5️⃣ Update previous snapshot
-		newPrev := make(map[string]NetworkInterfaceStat)
-		for _, stat := range netprof.NetworkInterface {
-			newPrev[stat.Name] = stat
-		}
-		prev = newPrev
-
-		// Sleep until next interval, accounting for elapsed time
-		time.Sleep(interval - time.Since(start))
-	}
-
-	fmt.Println("\n✅ Finished profiling after 5 iterations.")
-}
