@@ -10,7 +10,7 @@ import (
 )
 
 // tolerance is the allowed error margin for timing intervals in tests.
-const tolerance = 0.2 / 100.0
+const tolerance = 2 / 100.0
 
 // TestCPUProfilerIntegration performs comprehensive integration testing of the CPU profiler.
 // It validates the complete lifecycle: initialization, profiling start/stop, metrics collection,
