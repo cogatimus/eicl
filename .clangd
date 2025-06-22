@@ -1,0 +1,6 @@
+CompileFlags:
+  Add: [
+    "-I/opt/cuda/include",
+    "-I/opt/cuda/extras/CUPTI/include"
+  ]
+
