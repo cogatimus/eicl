@@ -9,6 +9,8 @@
 
 // TODO: get rid of the memory bug
 // TODO: add more metrics to be tracked
+// TODO: compile instructions
+
 
 #include <cstdint>
 #include <cstdlib>
