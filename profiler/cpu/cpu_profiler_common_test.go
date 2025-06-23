@@ -58,24 +58,24 @@ func TestCPUProfilerIntegration(t *testing.T) {
 		metricsStream.mutex.RLock()
 		defer metricsStream.mutex.RUnlock()
 		isInitialized := false
-		var previous_timestamp time.Time
+		var previousTimestamp time.Time
 		for i, metrics := range metricsStream.CPUDynamicMetrics {
 			if metrics.Timestamp.IsZero() {
 				t.Errorf("Metric %d has zero timestamp", i)
 			}
 			if !isInitialized {
 				isInitialized = true
-				previous_timestamp = metrics.Timestamp
+				previousTimestamp = metrics.Timestamp
 			} else {
 				// Validate the interval between metrics
 
-				diff := metrics.Timestamp.Sub(previous_timestamp).Abs()
+				diff := metrics.Timestamp.Sub(previousTimestamp).Abs()
 				allowedError := time.Duration(float64(interval) * tolerance)
 
 				if diff > interval+allowedError || diff < interval-allowedError {
 					t.Errorf("Expected interval ~%v (+/-%v), got: %v", interval, allowedError, diff)
 				}
-				previous_timestamp = metrics.Timestamp
+				previousTimestamp = metrics.Timestamp
 			}
 			if metrics.CPUUtilization == nil {
 				t.Errorf("Metric %d missing CPU utilization", i)
@@ -94,12 +94,12 @@ func TestCPUProfilerIntegration(t *testing.T) {
 
 	// Test static metrics YAML output
 	t.Run("StaticMetricsYAML", func(t *testing.T) {
-		cpuYAML := metricsStream.CPUStaticMetrics.cpu.YAMLString()
+		cpuYAML := metricsStream.CPUStaticMetrics.CPU.YAMLString()
 		if cpuYAML == "" {
 			t.Error("Expected non-empty CPU YAML string")
 		}
 
-		topologyYAML := metricsStream.CPUStaticMetrics.topology.YAMLString()
+		topologyYAML := metricsStream.CPUStaticMetrics.Topology.YAMLString()
 		if topologyYAML == "" {
 			t.Error("Expected non-empty topology YAML string")
 		}
@@ -178,7 +178,7 @@ func TestCPUMetricStreamCreation(t *testing.T) {
 		}
 
 		// Verify static metrics are populated
-		if stream.CPUStaticMetrics.cpu.TotalCores == 0 {
+		if stream.CPUStaticMetrics.CPU.TotalCores == 0 {
 			t.Error("Expected CPU static metrics to be populated with core count")
 		}
 
