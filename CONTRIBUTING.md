@@ -1,6 +1,6 @@
 # Contributing to EICL
 
-Thanks for your interest in contributing to EICL — a hacker-friendly system profiler focused on transparency, speed, and useful metrics.
+Thanks for your interest in contributing to EICL — a system profiler-benchmarker focused on transparency, speed, and useful metrics.
 
 This project is still in early development, so expect a lot of churn. That said, we’d love your contributions — especially if you follow the rules.
 
@@ -19,9 +19,9 @@ This project is still in early development, so expect a lot of churn. That said,
 - All commits **must be signed** (`git commit -S`)
 - No emojis in commit messages or PR descriptions
 - Use clear, descriptive commit messages following this style:
-    profiler: add basic CPU usage collection
-    gpu: integrate HIP runtime kernel benchmarking
-    tests: add integration tests for I/O stream profiler
+  profiler: add basic CPU usage collection
+  gpu: integrate HIP runtime kernel benchmarking
+  tests: add integration tests for I/O stream profiler
 
 ### 🧪 Testing
 

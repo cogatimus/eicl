@@ -1,6 +1,6 @@
 # EICL - Efficiency Is Clever Laziness
 
-**EICL** is a fast, modular, and lightweight system profiler and benchmarking suite built for developers, engineers, and performance nerds who want to *stop guessing and start measuring*. It offers a unified interface for profiling across CPU, GPU, I/O, network, memory, and runtime metrics — with extensibility and no bloat.
+**EICL** is a fast, modular, and lightweight system profiler and benchmarking suite built for developers, engineers, and performance nerds who want to _stop guessing and start measuring_. It offers a unified interface for profiling across CPU, GPU, I/O, network, memory, and runtime metrics — with extensibility and no bloat.
 
 > Think `perf`, but cross-platform. Think `htop`, but smarter. Think flame graphs, call trees, treemaps, and daemonized insights — all in one place.
 
@@ -9,7 +9,7 @@
 EICL will eventually support all major operating systems and platforms, starting with:
 
 - ✅ Linux
-- ✅ Windows  
+- ✅ Windows
 - ⏳ macOS, BSD, and others (planned)
 
 Long-term goals include:
@@ -18,21 +18,22 @@ Long-term goals include:
 - CPU & GPU memory profiling
 - I/O and network profiling
 - Runtime profiling & benchmarking
-- Ray tracing microbenchmarks
+- Ray tracing benchmarks
 - Rich visualization (flame graphs, sunburst diagrams, treemaps, etc.)
 - Daemon mode for continuous service/application monitoring
-- CLI-first, no bullshit UX
+- CLI-first
 
 ## 🛠️ Tech Stack
 
-| Component       | Tech                          |
-|----------------|-------------------------------|
-| Core System     | Go                            |
-| GPU Profiling   | Python + Triton/CUDA + HIP    |
-| Visualization   | Web (TBD), CLI Graphing (Go)  |
-| Testing         | Go test + dedicated integration folder |
+| Component     | Tech                                   |
+| ------------- | -------------------------------------- |
+| Core System   | Go                                     |
+| GPU Profiling | Python + Triton/CUDA + HIP (TBD)       |
+| Visualization | Web (TBD), CLI Graphing (Go)           |
+| Testing       | Go test + dedicated integration folder |
 
 ## 📂 Project Structure (WIP)
+
 ```text
 eicl/
 ├── bench/                 # Benchmarking modules (CPU, GPU, Mem, I/O, Net)
@@ -63,6 +64,7 @@ eicl/
 ├── go.mod
 └── go.sum
 ```
+
 ## 🧪 Testing Guidelines
 
 - Use `*_test.go` files in the same package for unit tests
@@ -87,7 +89,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 ## 👨‍🔧 Core Maintainers
 
 - Sri Guru Datta Pisupati (@pupperemeritus)
-- A select few (you know who you are)
+- Rishikesh M (@Rishik00)
+- Adhit Simhadri (@erizosamurai)
+- Akil Krishna (@akil-krsna)
 
 ## ⚠️ Status
 
@@ -95,4 +99,4 @@ Under active development. No guarantees, no warranties. You break it, you fix it
 
 ---
 
-_“Efficiency is clever laziness.” — Not Larry Wall but it should’ve been._
+_“Efficiency is clever laziness.” — Not Larry Wall but it should’ve been; its actually by echo._
