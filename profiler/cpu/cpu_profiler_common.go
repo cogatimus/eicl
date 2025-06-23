@@ -12,10 +12,15 @@ package cpu
 import (
 	"fmt"
 	"log"
+	"regexp"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/jaypipes/ghw"
+	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/sensors"
 )
 
 // CPUStaticMetrics holds immutable CPU hardware information collected once during initialization.
@@ -32,7 +37,6 @@ type CPUStaticMetrics struct {
 //   - *CPUStaticMetrics: Populated static metrics structure
 //   - error: Any error encountered during hardware information gathering
 func NewCPUStaticMetrics() (*CPUStaticMetrics, error) {
-
 	cpu, err := ghw.CPU()
 	if err != nil {
 		log.Printf("ERROR: Failed to collect CPU information: %v", err)
@@ -79,6 +83,103 @@ type CPUDynamicsMetrics struct {
 	CacheUsage     [3]float64 // L1, L2, L3 cache usage percentages
 	TotalCPUPower  int32      // Total CPU package power consumption in watts
 	Timestamp      time.Time  // Exact time when metrics were collected
+	TempSource     string     // "per-core", "fallback", or "none"
+	TempLabels     []string   // optional: what each temperature reading represents
+}
+
+func getCPUFrequencies() ([]float64, error) {
+	freqStats, err := cpu.Info()
+	if err != nil {
+		return nil, err
+	}
+
+	freqs := make([]float64, len(freqStats))
+	for i, stat := range freqStats {
+		freqs[i] = stat.Mhz
+	}
+	return freqs, nil
+}
+
+func collectCPUTemperatures(numCores int, all []sensors.TemperatureStat) ([]float64, string, []string, error) {
+	type entry struct {
+		temp  float64
+		label string
+	}
+
+	perCore := make([]entry, numCores)
+	coreFound := 0
+	var sharedCandidates []entry
+
+	for _, sensor := range all {
+		key := strings.ToLower(sensor.SensorKey)
+
+		// Skip known non-CPU sensors
+		switch {
+		case strings.Contains(key, "it87"), strings.Contains(key, "nvme"),
+			strings.Contains(key, "acpitz"), strings.Contains(key, "pch"),
+			strings.Contains(key, "gpu"), strings.Contains(key, "ec"),
+			strings.Contains(key, "tz"): // thermal zone
+			continue
+		}
+
+		// Now strictly consider only likely CPU sensors
+		entry := entry{temp: sensor.Temperature, label: sensor.SensorKey}
+
+		switch {
+		case strings.HasPrefix(key, "core"):
+			// Intel: "core0", "core1", ...
+			if i, err := strconv.Atoi(strings.TrimPrefix(key, "core")); err == nil && i < numCores {
+				perCore[i] = entry
+				coreFound++
+				continue
+			}
+
+		case strings.Contains(key, "tccd"):
+			// AMD: "k10temp_tccd0", etc.
+			if i, err := strconv.Atoi(regexp.MustCompile(`\d+`).FindString(key)); err == nil && i < numCores {
+				perCore[i] = entry
+				coreFound++
+				continue
+			}
+
+		case strings.Contains(key, "tctl"), strings.Contains(key, "package"),
+			strings.Contains(key, "cpu"), strings.Contains(key, "tdie"):
+			// Fallback CPU package sensor
+			sharedCandidates = append(sharedCandidates, entry)
+		}
+	}
+
+	// Use per-core if found sufficiently
+	if coreFound >= numCores/2 {
+		outTemps := make([]float64, numCores)
+		outLabels := make([]string, numCores)
+		for i := range perCore {
+			outTemps[i] = perCore[i].temp
+			outLabels[i] = perCore[i].label
+		}
+		return outTemps, "per-core", outLabels, nil
+	}
+
+	// Fallback: distribute shared CPU sensors
+	if len(sharedCandidates) > 0 {
+		outTemps := make([]float64, numCores)
+		outLabels := make([]string, numCores)
+		for i := range numCores {
+			entry := sharedCandidates[i%len(sharedCandidates)]
+			outTemps[i] = entry.temp
+			outLabels[i] = fmt.Sprintf("%s (shared)", entry.label)
+		}
+		return outTemps, "shared", outLabels, nil
+	}
+
+	// No valid CPU temps
+	return nil, "none", nil, fmt.Errorf("no usable CPU temperature sensors found (strict mode)")
+}
+
+type tempEntry struct {
+	value float64
+	index int
+	label string
 }
 
 // NewCPUMetricsAtInstant creates a new CPUDynamicsMetrics instance with properly sized slices
@@ -89,19 +190,52 @@ type CPUDynamicsMetrics struct {
 //
 // Returns:
 //   - *CPUDynamicsMetrics: Initialized metrics structure with timestamp
-func NewCPUMetricsAtInstant(staticmetrics CPUStaticMetrics) (*CPUDynamicsMetrics, error) {
+func NewCPUMetricsAtInstant(staticmetrics CPUStaticMetrics) (*CPUDynamicsMetrics, []error) {
 	timestamp := time.Now()
-	// TODO: Implement actual metric collection from system interfaces
+	numCores := staticmetrics.cpu.TotalCores
+	numThreads := staticmetrics.cpu.TotalHardwareThreads
+
 	metrics := &CPUDynamicsMetrics{
-		CPUUtilization: make([]float64, staticmetrics.cpu.TotalHardwareThreads),
-		CPUFrequency:   make([]float64, staticmetrics.cpu.TotalCores),
-		CPUTemperature: make([]float64, staticmetrics.cpu.TotalCores),
-		CPUPower:       make([]float64, staticmetrics.cpu.TotalCores),
-		CacheUsage:     [3]float64{0.0, 0.0, 0.0}, // TODO: Implement cache usage collection
-		TotalCPUPower:  int32(0),                  // TODO: Implement total power measurement
+		CPUUtilization: make([]float64, numThreads),
+		CPUFrequency:   make([]float64, numCores),
+		CPUTemperature: make([]float64, numCores),
+		CPUPower:       make([]float64, numCores),
+		CacheUsage:     [3]float64{-1, -1, -1},
+		TotalCPUPower:  0,
 		Timestamp:      timestamp,
+		TempSource:     "none",
 	}
-	return metrics, nil
+
+	var errslice []error
+
+	// Utilization
+	if cpuUtil, err := cpu.Percent(0, true); err == nil {
+		metrics.CPUUtilization = cpuUtil
+	} else {
+		errslice = append(errslice, fmt.Errorf("cpu.Percent failed: %w", err))
+	}
+
+	// Frequency (placeholder — replace with per-core if needed)
+	cpuFreqs, cpuFreqError := getCPUFrequencies()
+	copy(metrics.CPUFrequency, cpuFreqs)
+
+	allTemps, sensorserror := sensors.SensorsTemperatures()
+	// Temperature
+	cpuTemps, source, labels, temparsingerr := collectCPUTemperatures(int(staticmetrics.cpu.TotalCores), allTemps)
+
+	if cpuFreqError != nil {
+		errslice = append(errslice, cpuFreqError)
+	}
+	if temparsingerr != nil {
+		errslice = append(errslice, sensorserror)
+	} else {
+		metrics.CPUTemperature = cpuTemps
+		metrics.TempSource = source
+		metrics.TempLabels = labels
+	}
+	metricsstring := metrics.String()
+	fmt.Println(metricsstring)
+	return metrics, errslice
 }
 
 func (cpumetrics *CPUDynamicsMetrics) String() string {
@@ -112,8 +246,8 @@ func (cpumetrics *CPUDynamicsMetrics) String() string {
 		"\nCache Usage: L1: " + fmt.Sprintf("%.2f", cpumetrics.CacheUsage[0]) +
 		", L2: " + fmt.Sprintf("%.2f", cpumetrics.CacheUsage[1]) +
 		", L3: " + fmt.Sprintf("%.2f", cpumetrics.CacheUsage[2]) +
-		"\nTotal CPU Power: " + fmt.Sprintf("%d", cpumetrics.TotalCPUPower) +
-		"\nTimestamp: " + cpumetrics.Timestamp.String()
+		"\nTotal CPU Power: " + fmt.Sprintf("%d", cpumetrics.TotalCPUPower) + "\nTemperature Sources: " +
+		cpumetrics.TempSource + "\nTimestamp: " + cpumetrics.Timestamp.String()
 }
 
 // CPUMetricsStream manages the lifecycle and data collection of CPU profiling.
@@ -138,10 +272,10 @@ type CPUMetricsStream struct {
 	isRunning         bool                 // Tracks profiling state
 }
 
-func (metricsStream *CPUMetricsStream) String() string {
+func (metricsstream *CPUMetricsStream) String() string {
 	return "CPU Metrics Stream:\n" +
-		"Static Metrics: " + metricsStream.CPUStaticMetrics.String() +
-		"\nDynamic Metrics Count: " + fmt.Sprintf("%d", len(metricsStream.CPUDynamicMetrics))
+		"Static Metrics: " + metricsstream.CPUStaticMetrics.String() +
+		"\nDynamic Metrics Count: " + fmt.Sprintf("%d", len(metricsstream.CPUDynamicMetrics))
 }
 
 // StartProfiling begins continuous CPU metrics collection at the specified interval.
@@ -157,7 +291,7 @@ func (metricsStream *CPUMetricsStream) String() string {
 // TODO: Add temperature collection via thermal zones
 // TODO: Add power consumption monitoring
 // TODO: Add cache usage statistics collection
-func (metricsStream *CPUMetricsStream) StartProfiling(interval time.Duration, wg *sync.WaitGroup) error {
+func (metricsstream *CPUMetricsStream) StartProfiling(interval time.Duration, wg *sync.WaitGroup) error {
 	if wg != nil {
 		defer wg.Done()
 	}
@@ -165,23 +299,23 @@ func (metricsStream *CPUMetricsStream) StartProfiling(interval time.Duration, wg
 	// Validate interval
 	if interval <= 0 {
 		err := fmt.Errorf("invalid profiling interval: %v", interval)
-		metricsStream.logger.Printf("ERROR: %v", err)
+		metricsstream.logger.Printf("ERROR: %v", err)
 		return err
 	}
 
 	if interval < 10*time.Millisecond {
-		metricsStream.logger.Printf("WARNING: Very short profiling interval (%v) may cause high CPU usage", interval)
+		metricsstream.logger.Printf("WARNING: Very short profiling interval (%v) may cause high CPU usage", interval)
 	}
 
-	metricsStream.mutex.Lock()
-	if metricsStream.isRunning {
-		metricsStream.mutex.Unlock()
+	metricsstream.mutex.Lock()
+	if metricsstream.isRunning {
+		metricsstream.mutex.Unlock()
 		err := fmt.Errorf("profiling is already running")
-		metricsStream.logger.Printf("ERROR: %v", err)
+		metricsstream.logger.Printf("ERROR: %v", err)
 		return err
 	}
-	metricsStream.isRunning = true
-	metricsStream.mutex.Unlock()
+	metricsstream.isRunning = true
+	metricsstream.mutex.Unlock()
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -193,23 +327,23 @@ func (metricsStream *CPUMetricsStream) StartProfiling(interval time.Duration, wg
 		case <-ticker.C:
 
 			// TODO: Replace with actual metric collection implementation
-			cpumetricsatinstant, err := NewCPUMetricsAtInstant(metricsStream.CPUStaticMetrics)
+			cpumetricsatinstant, err := NewCPUMetricsAtInstant(metricsstream.CPUStaticMetrics)
 			if err != nil {
-				metricsStream.logger.Printf("ERROR: Failed to collect CPU metrics: %v", err)
+				metricsstream.logger.Printf("ERROR: Failed to collect CPU metrics: %v", err)
 				continue // Skip this collection cycle but continue profiling
 			}
 
-			metricsStream.mutex.Lock()
-			metricsStream.CPUDynamicMetrics = append(metricsStream.CPUDynamicMetrics, *cpumetricsatinstant)
+			metricsstream.mutex.Lock()
+			metricsstream.CPUDynamicMetrics = append(metricsstream.CPUDynamicMetrics, *cpumetricsatinstant)
 			metricsCollected++
-			metricsStream.mutex.Unlock()
+			metricsstream.mutex.Unlock()
 
-		case <-metricsStream.stopChan:
-			metricsStream.mutex.Lock()
-			metricsStream.isRunning = false
-			metricsStream.mutex.Unlock()
+		case <-metricsstream.stopChan:
+			metricsstream.mutex.Lock()
+			metricsstream.isRunning = false
+			metricsstream.mutex.Unlock()
 
-			metricsStream.logger.Printf("INFO: CPU profiling stopped. Total metrics collected: %d", metricsCollected)
+			metricsstream.logger.Printf("INFO: CPU profiling stopped. Total metrics collected: %d", metricsCollected)
 			return nil
 		}
 	}
@@ -223,30 +357,30 @@ func (metricsStream *CPUMetricsStream) StartProfiling(interval time.Duration, wg
 //
 // Returns:
 //   - error: Any error encountered during profiling stop
-func (s *CPUMetricsStream) StopProfiling(wg *sync.WaitGroup) error {
-	s.logger.Println("INFO: Stopping CPU profiling")
+func (metricsstream *CPUMetricsStream) StopProfiling(wg *sync.WaitGroup) error {
+	metricsstream.logger.Println("INFO: Stopping CPU profiling")
 
 	var stopErr error
-	s.stopOnce.Do(func() {
-		if s.stopChan != nil {
-			s.logger.Println("DEBUG: Sending stop signal")
-			close(s.stopChan)
+	metricsstream.stopOnce.Do(func() {
+		if metricsstream.stopChan != nil {
+			metricsstream.logger.Println("DEBUG: Sending stop signal")
+			close(metricsstream.stopChan)
 		} else {
 			stopErr = fmt.Errorf("stop channel is nil")
-			s.logger.Printf("ERROR: %v", stopErr)
+			metricsstream.logger.Printf("ERROR: %v", stopErr)
 		}
 	})
 
 	if wg != nil {
 		wg.Done()
-		s.logger.Println("DEBUG: WaitGroup signaled")
+		metricsstream.logger.Println("DEBUG: WaitGroup signaled")
 	}
 
 	if stopErr != nil {
 		return stopErr
 	}
 
-	s.logger.Println("INFO: CPU profiling stop completed")
+	metricsstream.logger.Println("INFO: CPU profiling stop completed")
 	return nil
 }
 
