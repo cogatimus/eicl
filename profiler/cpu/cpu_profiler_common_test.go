@@ -169,7 +169,7 @@ func TestCPUMetricStreamCreation(t *testing.T) {
 			t.Fatalf("Failed to create CPU metrics stream: %v", err)
 		}
 		if stream == nil {
-			t.Error("Expected non-nil CPU metric stream")
+			t.Fatalf("Expected non-nil CPU metric stream")
 		}
 
 		// Verify logger is initialized
