@@ -156,6 +156,10 @@ func collectCPUTemperatures(numCores int) ([]float64, string, []string, error) {
 	if sensorserror != nil {
 		return nil, "", nil, sensorserror
 	}
+	if numCores <= 0 {
+		return nil, "none", nil, fmt.Errorf("invalid number of cores: %d (must be positive)", numCores)
+	}
+
 	perCore := make([]temperatureEntry, numCores)
 	coreFound := 0
 	var sharedCandidates []temperatureEntry
