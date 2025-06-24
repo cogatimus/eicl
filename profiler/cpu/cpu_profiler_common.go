@@ -118,7 +118,7 @@ func (cpumetricsstream *CPUMetricsStream) StartProfiling(interval time.Duration,
 
 			// TODO: Replace with actual metric collection implementation
 			cpumetricsatinstant, errs := NewCPUMetricsAtInstant(cpumetricsstream.CPUStaticMetrics)
-			if len(errs) != 0 {
+			if errs != nil {
 				cpumetricsstream.logger.Printf("ERROR: Failed to collect CPU metrics: %v", errs)
 				continue // Skip this collection cycle but continue profiling
 			}

@@ -2,6 +2,7 @@ package cpu
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"regexp"
@@ -17,7 +18,6 @@ import (
 
 // CPUStaticMetrics holds immutable CPU hardware information collected once during initialization.
 // This includes CPU topology, core counts, socket information, and hardware capabilities.
-
 type CPUStaticMetrics struct {
 	CPU      ghw.CPUInfo      `json:"cpu" yaml:"cpu"`
 	Topology ghw.TopologyInfo `json:"topology" yaml:"topology"`
@@ -83,10 +83,7 @@ func NewCPUStaticMetrics() (*CPUStaticMetrics, error) {
 }
 
 // String provides a human-readable representation of the CPUStaticMetrics.
-func (cpustaticmetrics *CPUStaticMetrics) String(fullYAML bool) string {
-	if fullYAML {
-		return cpustaticmetrics.YAMLString()
-	}
+func (cpustaticmetrics *CPUStaticMetrics) String() string {
 	return cpustaticmetrics.ShortString()
 }
 
@@ -119,7 +116,6 @@ func (cpustaticmetrics *CPUStaticMetrics) YAMLString() string {
 
 // CPUDynamicsMetrics represents a snapshot of CPU performance metrics at a specific point in time.
 // All slice lengths are determined by the static CPU topology information.
-
 type CPUDynamicsMetrics struct {
 	CPUUtilization []float64 `json:"cpu_utilization" yaml:"cpu_utilization"`
 	CPUFrequency   []float64 `json:"cpu_frequency" yaml:"cpu_frequency"`
@@ -132,6 +128,7 @@ type CPUDynamicsMetrics struct {
 	TempLabels     []string  `json:"temp_labels" yaml:"temp_labels"`
 }
 
+// Collects CPU Frequencies once at instant
 func getCPUFrequencies() ([]float64, error) {
 	freqStats, err := gopsutilcpu.Info()
 	if err != nil {
@@ -145,15 +142,23 @@ func getCPUFrequencies() ([]float64, error) {
 	return freqs, nil
 }
 
-func collectCPUTemperatures(numCores int, all []sensors.TemperatureStat) ([]float64, string, []string, error) {
-	type entry struct {
-		temp  float64
-		label string
-	}
+// Temperature Entry
+// Used as intermediate store of value while parsing sensors output
+type temperatureEntry struct {
+	temp  float64
+	label string
+}
 
-	perCore := make([]entry, numCores)
+// Collects CPU Temperatures once at instant
+// numCores determines the expected slice size
+func collectCPUTemperatures(numCores int) ([]float64, string, []string, error) {
+	all, sensorserror := sensors.SensorsTemperatures()
+	if sensorserror != nil {
+		return nil, "", nil, sensorserror
+	}
+	perCore := make([]temperatureEntry, numCores)
 	coreFound := 0
-	var sharedCandidates []entry
+	var sharedCandidates []temperatureEntry
 
 	for _, sensor := range all {
 		key := strings.ToLower(sensor.SensorKey)
@@ -168,7 +173,7 @@ func collectCPUTemperatures(numCores int, all []sensors.TemperatureStat) ([]floa
 		}
 
 		// Now strictly consider only likely CPU sensors
-		entry := entry{temp: sensor.Temperature, label: sensor.SensorKey}
+		entry := temperatureEntry{temp: sensor.Temperature, label: sensor.SensorKey}
 
 		switch {
 		case strings.HasPrefix(key, "core"):
@@ -221,10 +226,14 @@ func collectCPUTemperatures(numCores int, all []sensors.TemperatureStat) ([]floa
 	return nil, "none", nil, fmt.Errorf("no usable CPU temperature sensors found (strict mode)")
 }
 
-type tempEntry struct {
-	value float64
-	index int
-	label string
+// Collect CPU Utilization per core at an instant
+func collectCPUUtilization() ([]float64, error) {
+	cpuUtilization, errReturn := gopsutilcpu.Percent(0, true)
+	if errReturn != nil {
+		errReturn = fmt.Errorf("cpu.Percent failed: %w", errReturn)
+		cpuUtilization = nil
+	}
+	return cpuUtilization, errReturn
 }
 
 // NewCPUMetricsAtInstant creates a new CPUDynamicsMetrics instance with properly sized slices
@@ -235,7 +244,7 @@ type tempEntry struct {
 //
 // Returns:
 //   - *CPUDynamicsMetrics: Initialized metrics structure with timestamp
-func NewCPUMetricsAtInstant(staticmetrics CPUStaticMetrics) (*CPUDynamicsMetrics, []error) {
+func NewCPUMetricsAtInstant(staticmetrics CPUStaticMetrics) (*CPUDynamicsMetrics, error) {
 	timestamp := time.Now()
 	numCores := staticmetrics.CPU.TotalCores
 	numThreads := staticmetrics.CPU.TotalHardwareThreads
@@ -245,40 +254,37 @@ func NewCPUMetricsAtInstant(staticmetrics CPUStaticMetrics) (*CPUDynamicsMetrics
 		CPUFrequency:   make([]float64, numCores),
 		CPUTemperature: make([]float64, numCores),
 		CPUPower:       make([]float64, numCores),
-		CacheUsage:     []float64{-1, -1, -1},
+		CacheUsage:     nil,
 		TotalCPUPower:  -1,
 		Timestamp:      timestamp,
 		TempSource:     "none",
 	}
 
-	var errslice []error
+	var errAggregator error
 
-	// Utilization
-	if cpuUtil, err := gopsutilcpu.Percent(0, true); err == nil {
-		metrics.CPUUtilization = cpuUtil
-	} else {
-		errslice = append(errslice, fmt.Errorf("cpu.Percent failed: %w", err))
+	cpuUtilization, cpuUtilizationErr := collectCPUUtilization()
+	if cpuUtilizationErr != nil {
+		errAggregator = errors.Join(errAggregator, fmt.Errorf("collectCPUUtilization: %w", cpuUtilizationErr))
 	}
+	metrics.CPUUtilization = cpuUtilization
 
-	// Frequency (placeholder — replace with per-core if needed)
 	cpuFreqs, cpuFreqError := getCPUFrequencies()
+	if cpuFreqError != nil {
+		errAggregator = errors.Join(errAggregator, fmt.Errorf("getCPUFrequencies: %w", cpuFreqError))
+	}
 	copy(metrics.CPUFrequency, cpuFreqs)
 
-	allTemps, sensorserror := sensors.SensorsTemperatures()
-	// Temperature
-	cpuTemps, source, labels, temparsingerr := collectCPUTemperatures(int(staticmetrics.CPU.TotalCores), allTemps)
+	cpuTemps, source, labels, temperrs := collectCPUTemperatures(int(staticmetrics.CPU.TotalCores))
 
-	if cpuFreqError != nil {
-		errslice = append(errslice, cpuFreqError)
-	}
-	if temparsingerr != nil {
-		errslice = append(errslice, sensorserror)
+	if temperrs != nil {
+		errAggregator = errors.Join(errAggregator, fmt.Errorf("collectCPUTemperatures: %w", temperrs))
 	} else {
 		metrics.CPUTemperature = cpuTemps
 		metrics.TempSource = source
 		metrics.TempLabels = labels
 	}
-	return metrics, errslice
+
+	return metrics, errAggregator
 }
 
 func (cpudynamicmetrics *CPUDynamicsMetrics) String() string {
