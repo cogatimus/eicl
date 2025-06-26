@@ -6,15 +6,15 @@ This project is still in early development, so expect a lot of churn. That said,
 
 ---
 
-## 🚦 Rules of Engagement
+## Rules of Engagement
 
-### 📌 Branching
+### Branching
 
 - All work goes through **feature branches** via PRs into `staging-main`
 - Never merge `staging-main` into your feature branch — use `git rebase`
 - Keep commits atomic and clean. Squash if necessary.
 
-### 🔏 Commits
+### Commits
 
 - All commits **must be signed** (`git commit -S`)
 - No emojis in commit messages or PR descriptions
@@ -23,21 +23,21 @@ This project is still in early development, so expect a lot of churn. That said,
   gpu: integrate HIP runtime kernel benchmarking
   tests: add integration tests for I/O stream profiler
 
-### 🧪 Testing
+### Testing
 
 - Unit tests live in the same directory (`foo_test.go`)
 - Integration & end-to-end tests go in the `/tests` folder
 - Use logging at test entry/exit points to aid debugging
 - Don’t spam logs in polling/looped functions
 
-### 🧼 Formatting & Style
+### Formatting & Style
 
 - Run `gofmt` before pushing Go code
 - Follow [Effective Go](https://go.dev/doc/effective_go)
 - Document all exported symbols with godoc-style comments
 - Use meaningful names and consistent interfaces
 
-### 📁 Folder Guidelines
+### Folder Guidelines
 
 - No random scripts or utils in root
 - Keep implementation logic in internal packages
@@ -45,7 +45,7 @@ This project is still in early development, so expect a lot of churn. That said,
 
 ---
 
-## 🧠 Before You Submit a PR
+## Before You Submit a PR
 
 1. Does your code follow the rules above?
 2. Did you add tests where relevant?
@@ -57,13 +57,13 @@ If yes, you’re good to go.
 
 ---
 
-## 🗂 Generating Issues
+## Generating Issues
 
 Please create GitHub issues for every planned feature, bugfix, or refactor. Use them to track work, link PRs, and document discussions. Good issue hygiene helps us all.
 
 ---
 
-## 📬 Contact
+## Contact
 
 DM or mention us in a PR or issue. We’re active and watching.
 
