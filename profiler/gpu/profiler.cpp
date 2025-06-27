@@ -7,10 +7,10 @@
 // compile citing absence of -lcupti
 // ./profiled_kernel
 
-// TODO: get rid of the memory bug
 // TODO: add more metrics to be tracked
 // TODO: compile instructions
-
+// TODO: error handling 
+// TODO: add cuda version checking - done
 
 #include <cstdint>
 #include <cstdlib>
@@ -25,18 +25,36 @@
 // Timestamp at trace initialization time. Used to normalized other
 static uint64_t startTimestamp;
 
+bool checkCUDAVersion() {
+    int runtime_version = 0;
+    bool isCompatible = true;
+
+    cudaRuntimeGetVersion(&runtime_version);
+    
+    if (runtime_version >= 11060) {
+        std::cout << "CUDA Runtime version: " << runtime_version << std::endl;
+    } else {
+        isCompatible = false;
+    }
+
+    return isCompatible;
+}
+
 // macro for calling a fn? I'm not sure what this does
 #define CUPTI_CALL(call)                                                       \
   do {                                                                         \
     CUptiResult _status = call;                                                \
+  
     if (_status != CUPTI_SUCCESS) {                                            \
       const char *errstr;                                                      \
       cuptiGetResultString(_status, &errstr);                                  \
       fprintf(stderr, "%s:%d: error: function %s failed with error %s.\n",     \
               __FILE__, __LINE__, #call, errstr);                              \
       exit(-1);                                                                \
+  
     }                                                                          \
   } while (0)
+
 
 // Defining the handler for memory
 static const char *getMemKind(CUpti_ActivityMemcpyKind kind) {
@@ -59,11 +77,11 @@ static const char *getMemKind(CUpti_ActivityMemcpyKind kind) {
 static void printActivity(CUpti_Activity *record) {
   switch (record->kind) {
 
-    // CUPTI_ACTIVITY_KIND_DEVICE is for the actual GPU device itself.
-    // We are logging the followign: device ID,
-    //                               global memory (DRAM) bandwidth and size
-    //                               Number of streaming multiprocessors
-    //                               L2 Cache size
+  // CUPTI_ACTIVITY_KIND_DEVICE is for the actual GPU device itself.
+  // We are logging the followign: device ID,
+  //                               global memory (DRAM) bandwidth and size
+  //                               Number of streaming multiprocessors
+  //                               L2 Cache size
 
   case CUPTI_ACTIVITY_KIND_DEVICE: {
     CUpti_ActivityDevice5 *device = (CUpti_ActivityDevice5 *)record;
@@ -76,21 +94,18 @@ static void printActivity(CUpti_Activity *record) {
 
     std::cout << "[Device Info]" << std::endl;
     std::cout << "  Device ID              : " << deviceId << std::endl;
-    std::cout << "  Global Mem Bandwidth   : " << gBand / 1e9 << " GB/s"
-              << std::endl;
-    std::cout << "  Global Mem Size        : " << gMemSize / (1024 * 1024)
-              << " MB" << std::endl;
-    std::cout << "  L2 Cache Size          : " << l2size / 1024 << " KB"
-              << std::endl;
+    std::cout << "  Global Mem Bandwidth   : " << gBand / 1e9 << " GB/s" << std::endl;
+    std::cout << "  Global Mem Size        : " << gMemSize / (1024 * 1024) << " MB" << std::endl;
+    std::cout << "  L2 Cache Size          : " << l2size / 1024 << " KB" << std::endl;
     std::cout << "  Multiprocessors        : " << numProcessors << std::endl;
     break;
   }
 
-    // CUPTI_ACTIVITY_KIND_MEMCPY tracks memory transfers between host and
-    // device and we track the following ones for simplicity; bytes deviceId
-    // contId
-    // This section is not done yet. for some reason its not tracking the number
-    // of bytes copied but is able to get the type of memcpy happening
+  // CUPTI_ACTIVITY_KIND_MEMCPY tracks memory transfers between host and
+  // device and we track the following ones for simplicity; bytes deviceId
+  // contId
+  // This section is not done yet. for some reason its not tracking the number
+  // of bytes copied but is able to get the type of memcpy happening
 
   case CUPTI_ACTIVITY_KIND_MEMCPY: {
     CUpti_ActivityMemcpy5 *memcpyRec = (CUpti_ActivityMemcpy5 *)record;
@@ -100,8 +115,7 @@ static void printActivity(CUpti_Activity *record) {
     uint64_t contId = memcpyRec->contextId;
     uint64_t streamId = memcpyRec->streamId;
 
-    CUpti_ActivityMemcpyKind kind =
-        (CUpti_ActivityMemcpyKind)memcpyRec->copyKind;
+    CUpti_ActivityMemcpyKind kind = (CUpti_ActivityMemcpyKind) memcpyRec->copyKind;
 
     std::cout << "[Memcpy]" << std::endl;
     std::cout << "  Kind             : " << getMemKind(kind) << std::endl;
@@ -109,12 +123,9 @@ static void printActivity(CUpti_Activity *record) {
     std::cout << "  Device ID        : " << deviceId << std::endl;
     std::cout << "  Context ID       : " << contId << std::endl;
     std::cout << "  Stream ID        : " << streamId << std::endl;
-    std::cout << "  Start Time (ns)  : " << memcpyRec->start - startTimestamp
-              << std::endl;
-    std::cout << "  End Time (ns)    : " << memcpyRec->end - startTimestamp
-              << std::endl;
-    std::cout << "  Duration (μs)    : "
-              << (memcpyRec->end - memcpyRec->start) / 1000.0 << std::endl;
+    std::cout << "  Start Time (ns)  : " << memcpyRec->start - startTimestamp << std::endl;
+    std::cout << "  End Time (ns)    : " << memcpyRec->end - startTimestamp << std::endl;
+    std::cout << "  Duration (μs)    : " << (memcpyRec->end - memcpyRec->start) / 1000.0 << std::endl;
     break;
   }
 
@@ -163,6 +174,13 @@ static void CUPTIAPI bufferCompleted(CUcontext ctx, uint32_t streamId,
 
 // Init trace for starting tracing. We establish what metrics to be traced.
 void InitTrace() {
+
+  bool isComp = checkCUDAVersion();
+
+  if (!isComp) {
+      std::cerr << "CUDA version is not compatible for the profiler, please upgrade or throw your GPU out." << std::endl;
+      exit(1);
+  }
 
   // Initialize the device and memory attribute tracking
   CUPTI_CALL(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_DEVICE));
