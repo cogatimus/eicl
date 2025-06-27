@@ -60,7 +60,7 @@ int main() {
 	}
 
     InitTrace();     // Begin profiling
-	vecAdd(&A, &B, &res, n);
+	vecAdd(A, B, res, n);
     finitTrace();    // End profiling
 	return 0;
 }
