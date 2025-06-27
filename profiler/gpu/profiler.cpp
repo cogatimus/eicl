@@ -41,18 +41,19 @@ bool checkCUDAVersion() {
 }
 
 // macro for calling a fn? I'm not sure what this does
-#define CUPTI_CALL(call)                                                       \
-  do {                                                                         \
-    CUptiResult _status = call;                                                \
-  
-    if (_status != CUPTI_SUCCESS) {                                            \
-      const char *errstr;                                                      \
-      cuptiGetResultString(_status, &errstr);                                  \
-      fprintf(stderr, "%s:%d: error: function %s failed with error %s.\n",     \
-              __FILE__, __LINE__, #call, errstr);                              \
-      exit(-1);                                                                \
-  
-    }                                                                          \
+// macro for calling a fn? I'm not sure what this does
+#define CUPTI_CALL(call)                                                   \
+  do                                                                       \
+{                                                                        \
+    CUptiResult _status = call;                                            \
+    if (_status != CUPTI_SUCCESS)                                          \
+    {                                                                      \
+      const char *errstr;                                                  \
+      cuptiGetResultString(_status, &errstr);                              \
+      fprintf(stderr, "%s:%d: error: function %s failed with error %s.\n", \
+              __FILE__, __LINE__, #call, errstr);                          \
+      exit(-1);                                                            \
+    }                                                                      \
   } while (0)
 
 
@@ -179,7 +180,6 @@ void InitTrace() {
 
   if (!isComp) {
       std::cerr << "CUDA version is not compatible for the profiler, please upgrade or throw your GPU out." << std::endl;
-      exit(1);
   }
 
   // Initialize the device and memory attribute tracking

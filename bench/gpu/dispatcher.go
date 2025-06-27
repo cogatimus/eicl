@@ -3,9 +3,14 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
+	// "os/exec"
 	"path/filepath"
 )
+
+// TODO: convertn the command to this bs !nvcc bench/gpu/nvidia/basic_vector.cu profiler/gpu/profiler.cpp -o profiler_app -Iprofiler/gpu -lcupti
+// This dispatcher just prints out the respective file paths for now. Later on it will be integrated with C lib and CUDA kernels can be directly run
+// from there
+
 
 func checkErr(err error) {
 	if err != nil {
@@ -20,7 +25,6 @@ func main() {
 	subDirs, err := os.ReadDir(currentDir)
 	checkErr(err)
 
-	profilerPath := ""
 
 	for _, file := range subDirs {
 		if file.IsDir() {
@@ -36,8 +40,9 @@ func main() {
 				cmd := fmt.Sprintf("nvcc -o profiler_app %s profiler.cpp -lcupti", subFile.Name())
 				fmt.Println("command:", cmd)
 
-				cmd := exec.Command(cmd)
-				if err := cmd.Run(); err != nil {panic(err)}
+				// TODO: weekend
+				// cmd := exec.Command(cmd)
+				// if err := cmd.Run(); err != nil {panic(err)}
 
 			}
 		}
