@@ -3,7 +3,7 @@
 #include <iostream>
 
 // How to include this -- idk
-#include "profiler/gpu/profiler.h"
+#include "../../../profiler/gpu/profiler.h"
 
 __global__ void vecAddKernel(float *A, float *B, float *res, int n) {
 	
@@ -16,8 +16,6 @@ __global__ void vecAddKernel(float *A, float *B, float *res, int n) {
 	}
 
 }
-
-
 
 // THis will be run on your CPU
 void vecAdd(float *A, float *B, float *res, int n) {
