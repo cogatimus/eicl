@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -124,7 +125,7 @@ type CPUDynamicsMetrics struct {
 	CacheUsage     []float64 `json:"cache_usage" yaml:"cache_usage"`
 	TotalCPUPower  int32     `json:"total_cpu_power" yaml:"total_cpu_power"`
 	Timestamp      time.Time `json:"timestamp" yaml:"timestamp"`
-	TempSource     string    `json:"temp_source" yaml:"temp_source"`
+	TempSource     string    `json:"temp_source" yaml:"temp_source" validate:"oneof=per-core ccd shared none"`
 	TempLabels     []string  `json:"temp_labels" yaml:"temp_labels"`
 }
 
@@ -149,85 +150,176 @@ type temperatureEntry struct {
 	label string
 }
 
-// Collects CPU Temperatures once at instant
-// numCores determines the expected slice size
+// collectCPUTemperatures collects instantaneous CPU temperatures.
+//
+// - numCores: the number of logical cores you expect.
+//
+// Returns:
+//
+// []float64 : temperatures (length depends on mode)
+// string    : one of "per-core", "ccd", "shared", or "none"
+// []string  : labels matching each temperature slot
+// error     : non-nil if mode == "none"
 func collectCPUTemperatures(numCores int) ([]float64, string, []string, error) {
-	all, sensorserror := sensors.SensorsTemperatures()
-	if sensorserror != nil {
-		return nil, "", nil, sensorserror
+	all, err := sensors.SensorsTemperatures()
+	if err != nil {
+		return nil, "none", nil, err
 	}
 	if numCores <= 0 {
-		return nil, "none", nil, fmt.Errorf("invalid number of cores: %d (must be positive)", numCores)
+		return nil, "none", nil, fmt.Errorf("invalid number of cores: %d", numCores)
 	}
 
-	perCore := make([]temperatureEntry, numCores)
-	coreFound := 0
-	var sharedCandidates []temperatureEntry
+	// Compile regexes once - flexible matching
+	reCore := regexp.MustCompile(`(?i)core.*?(\d+)`)
+	reTCCD := regexp.MustCompile(`(?i)tccd.*?(\d+)`)
 
+	// Storage for different temperature types
+	coreTemps := make(map[int]temperatureEntry)
+	ccdTemps := make(map[int]temperatureEntry)
+	var sharedTemps []temperatureEntry
+
+	// Parse all sensors
 	for _, sensor := range all {
 		key := strings.ToLower(sensor.SensorKey)
+		entry := temperatureEntry{sensor.Temperature, sensor.SensorKey}
 
-		// Skip known non-CPU sensors
-		switch {
-		case strings.Contains(key, "it87"), strings.Contains(key, "nvme"),
-			strings.Contains(key, "acpitz"), strings.Contains(key, "pch"),
-			strings.Contains(key, "gpu"), strings.Contains(key, "ec"),
-			strings.Contains(key, "tz"): // thermal zone
+		// Skip non-CPU sensors
+		if isNonCPUSensor(key) {
 			continue
 		}
 
-		// Now strictly consider only likely CPU sensors
-		entry := temperatureEntry{temp: sensor.Temperature, label: sensor.SensorKey}
-
-		switch {
-		case strings.HasPrefix(key, "core"):
-			// Intel: "core0", "core1", ...
-			if i, err := strconv.Atoi(strings.TrimPrefix(key, "core")); err == nil && i < numCores {
-				perCore[i] = entry
-				coreFound++
-				continue
+		// Intel per-core temperatures: core0, core1, etc.
+		if matches := reCore.FindStringSubmatch(key); matches != nil {
+			if idx, err := strconv.Atoi(matches[1]); err == nil && idx < numCores {
+				coreTemps[idx] = entry
 			}
+			continue
+		}
 
-		case strings.Contains(key, "tccd"):
-			// AMD: "k10temp_tccd0", etc.
-			if i, err := strconv.Atoi(regexp.MustCompile(`\d+`).FindString(key)); err == nil && i < numCores {
-				perCore[i] = entry
-				coreFound++
-				continue
+		// AMD CCD temperatures: tccd0, tccd1, etc.
+		if matches := reTCCD.FindStringSubmatch(key); matches != nil {
+			if idx, err := strconv.Atoi(matches[1]); err == nil {
+				ccdTemps[idx] = entry
 			}
+			continue
+		}
 
-		case strings.Contains(key, "tctl"), strings.Contains(key, "package"),
-			strings.Contains(key, "cpu"), strings.Contains(key, "tdie"):
-			// Fallback CPU package sensor
-			sharedCandidates = append(sharedCandidates, entry)
+		// Package-level or shared temperatures
+		if isSharedTemperature(key) {
+			sharedTemps = append(sharedTemps, entry)
+			continue
+		}
+
+		// Log unclassified sensors for debugging
+		fmt.Printf("UNCLASSIFIED Sensor Key: %s -> %.2f°C\n", sensor.SensorKey, sensor.Temperature)
+	}
+
+	// Try different temperature modes in order of preference
+	if temps, labels := tryPerCoreMode(coreTemps, numCores); temps != nil {
+		return temps, "per-core", labels, nil
+	}
+
+	if temps, labels := tryCCDMode(ccdTemps); temps != nil {
+		return temps, "ccd", labels, nil
+	}
+
+	if temps, labels := trySharedMode(sharedTemps, numCores); temps != nil {
+		return temps, "shared", labels, nil
+	}
+
+	return nil, "none", nil, fmt.Errorf("no usable CPU temperature sensors found")
+}
+
+// isNonCPUSensor checks if a sensor key represents a non-CPU sensor
+func isNonCPUSensor(key string) bool {
+	nonCPUKeywords := []string{"nvme", "acpitz", "it87", "pch", "gpu", "ec", "tz"}
+	for _, keyword := range nonCPUKeywords {
+		if strings.Contains(key, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+// isSharedTemperature checks if a sensor key represents a shared/package temperature
+func isSharedTemperature(key string) bool {
+	sharedKeywords := []string{"tctl", "tdie", "package", "cpu"}
+	for _, keyword := range sharedKeywords {
+		if strings.Contains(key, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+// tryPerCoreMode attempts to use per-core temperature readings
+func tryPerCoreMode(coreTemps map[int]temperatureEntry, numCores int) ([]float64, []string) {
+	// Need at least 50% of cores to have temperature readings
+	if len(coreTemps) < (numCores+1)/2 {
+		return nil, nil
+	}
+
+	temps := make([]float64, numCores)
+	labels := make([]string, numCores)
+
+	for i := range numCores {
+		if entry, exists := coreTemps[i]; exists {
+			temps[i] = entry.temp
+			labels[i] = entry.label
+		} else {
+			// Use 0 for missing cores - could also interpolate or use average
+			temps[i] = 0
+			labels[i] = fmt.Sprintf("core%d(missing)", i)
 		}
 	}
 
-	// Use per-core if found sufficiently
-	if coreFound >= numCores/2 {
-		outTemps := make([]float64, numCores)
-		outLabels := make([]string, numCores)
-		for i := range perCore {
-			outTemps[i] = perCore[i].temp
-			outLabels[i] = perCore[i].label
-		}
-		return outTemps, "per-core", outLabels, nil
+	return temps, labels
+}
+
+// tryCCDMode returns all available CCD temperatures directly
+func tryCCDMode(ccdTemps map[int]temperatureEntry) ([]float64, []string) {
+	if len(ccdTemps) == 0 {
+		return nil, nil
 	}
 
-	// Fallback: distribute shared CPU sensors
-	if len(sharedCandidates) > 0 {
-		outTemps := make([]float64, numCores)
-		outLabels := make([]string, numCores)
-		for i := range numCores {
-			entry := sharedCandidates[i%len(sharedCandidates)]
-			outTemps[i] = entry.temp
-			outLabels[i] = fmt.Sprintf("%s (shared)", entry.label)
-		}
-		return outTemps, "shared", outLabels, nil
+	// Get sorted list of CCD indices
+	var ccdIndices []int
+	for idx := range ccdTemps {
+		ccdIndices = append(ccdIndices, idx)
+	}
+	sort.Ints(ccdIndices)
+
+	// Return one temperature per CCD
+	temps := make([]float64, len(ccdIndices))
+	labels := make([]string, len(ccdIndices))
+
+	for i, ccdIdx := range ccdIndices {
+		entry := ccdTemps[ccdIdx]
+		temps[i] = entry.temp
+		labels[i] = fmt.Sprintf("%s(ccd%d)", entry.label, ccdIdx)
 	}
 
-	// No valid CPU temps
-	return nil, "none", nil, fmt.Errorf("no usable CPU temperature sensors found (strict mode)")
+	return temps, labels
+}
+
+// trySharedMode uses shared/package temperature for all cores
+func trySharedMode(sharedTemps []temperatureEntry, numCores int) ([]float64, []string) {
+	if len(sharedTemps) == 0 {
+		return nil, nil
+	}
+
+	temps := make([]float64, numCores)
+	labels := make([]string, numCores)
+
+	// Use the first shared temperature for all cores
+	// Could also average multiple shared temperatures if available
+	sharedTemp := sharedTemps[0]
+	for i := range numCores {
+		temps[i] = sharedTemp.temp
+		labels[i] = fmt.Sprintf("%s(shared)", sharedTemp.label)
+	}
+
+	return temps, labels
 }
 
 // Collect CPU Utilization per core at an instant

@@ -453,7 +453,8 @@ func TestCPUDynamicMetricsCreation(t *testing.T) {
 		if len(dynamicMetrics.CPUFrequency) != expectedCores {
 			t.Errorf("Expected CPU frequency slice size %d, got %d", expectedCores, len(dynamicMetrics.CPUFrequency))
 		}
-		if len(dynamicMetrics.CPUTemperature) != expectedCores {
+		accurateCountModes := []string{"per-core", "shared"}
+		if len(dynamicMetrics.CPUTemperature) != expectedCores && slices.Contains(accurateCountModes, dynamicMetrics.TempSource) {
 			t.Errorf("Expected CPU temperature slice size %d, got %d", expectedCores, len(dynamicMetrics.CPUTemperature))
 		}
 		if len(dynamicMetrics.CPUPower) != expectedCores {
@@ -623,24 +624,38 @@ func TestUtilityFunctions(t *testing.T) {
 	})
 
 	t.Run("collectCPUTemperatures", func(t *testing.T) {
-		// Test with different core counts
 		for _, numCores := range []int{1, 2, 4, 8} {
 			temps, source, labels, err := collectCPUTemperatures(numCores)
 			if err != nil {
 				t.Logf("Warning: collectCPUTemperatures failed for %d cores (may be expected): %v", numCores, err)
 				continue
 			}
-			if len(temps) != numCores {
-				t.Errorf("Expected %d temperature readings, got %d", numCores, len(temps))
+
+			switch source {
+			case "per-core", "shared":
+				if len(temps) != numCores {
+					t.Errorf("Expected %d temperature readings in mode '%s', got %d", numCores, source, len(temps))
+				}
+				if len(labels) != numCores {
+					t.Errorf("Expected %d temperature labels in mode '%s', got %d", numCores, source, len(labels))
+				}
+			case "ccd":
+				if len(temps) != len(labels) {
+					t.Errorf("CCD count not equal to label count\n %d != %d", len(temps), len(labels))
+				}
+
+			case "none":
+				t.Log("No usable temperatures found (source: none)")
+			default:
+				t.Errorf("Unexpected temperature source: %s", source)
 			}
+
 			if source == "" {
 				t.Error("Expected non-empty temperature source")
 			}
-			if len(labels) != numCores {
-				t.Errorf("Expected %d temperature labels, got %d", numCores, len(labels))
-			}
+
 			t.Logf("Temperatures for %d cores: %v (source: %s)", numCores, temps, source)
-			break // If one succeeds, don't test others
+			break // If one succeeds, stop testing further counts
 		}
 	})
 }
@@ -725,8 +740,11 @@ func TestDataIntegrity(t *testing.T) {
 			if len(dynamicMetrics.CPUFrequency) != expectedCores {
 				t.Errorf("Iteration %d: inconsistent CPU frequency slice size", i)
 			}
-			if len(dynamicMetrics.CPUTemperature) != expectedCores {
-				t.Errorf("Iteration %d: inconsistent CPU temperature slice size", i)
+			if len(dynamicMetrics.CPUTemperature) != expectedCores && dynamicMetrics.TempSource == "per-core" {
+				t.Errorf("Iteration %d: inconsistent per-core CPU temperature slice size: %d (got) != %d (expected)", i, len(dynamicMetrics.CPUTemperature), expectedCores)
+			}
+			if len(dynamicMetrics.CPUTemperature) != 1 && dynamicMetrics.TempSource == "shared" {
+				t.Errorf("Iteration %d: inconsistent shared CPU temperature slice size", i)
 			}
 			if len(dynamicMetrics.CPUUtilization) != expectedThreads {
 				t.Errorf("Iteration %d: inconsistent CPU utilization slice size", i)
@@ -889,7 +907,7 @@ func TestFieldValidation(t *testing.T) {
 		if dynamicMetrics.TempSource == "" {
 			t.Error("TempSource should be set")
 		}
-		validTempSources := []string{"per-core", "shared", "none"}
+		validTempSources := []string{"per-core", "shared", "ccd", "none"}
 
 		if !slices.Contains(validTempSources, dynamicMetrics.TempSource) {
 			t.Errorf("TempSource should be one of %v, got %s", validTempSources, dynamicMetrics.TempSource)
